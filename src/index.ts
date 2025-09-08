@@ -357,14 +357,14 @@ async function sendTransaction(
 // Check wallet balance (comment this line if you don't want to use it)
 // await getWalletBalance('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3', 'testnet');
 
-// // Send transaction (comment this line if you don't want to use it)
-// await sendTransaction('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3',
-//     'tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea', 700, 'testnet',
-//     " https://blockstream.info/testnet/api", 5);
+// Send transaction (comment this line if you don't want to use it)
+await sendTransaction('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3',
+    'tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea', 700, 'testnet',
+    " https://blockstream.info/testnet/api", 5);
 
 fetchAllTransactions('https://blockstream.info/testnet/api', 'tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea');
 // Check wallet balance again (comment this line if you don't want to use it)
-// await getWalletBalance('KyGKqW2yVjps3CrqgsSWJ94SLWKJTPc5zSVyomLYJP1LBwwArypj', 'testnet');
+await getWalletBalance('KyGKqW2yVjps3CrqgsSWJ94SLWKJTPc5zSVyomLYJP1LBwwArypj', 'testnet');
 
 // warning../../../ package.json: No license field
 // $ tsc
