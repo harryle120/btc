@@ -72,6 +72,85 @@ async function getWalletBalance(
     }
 }
 
+function computeNetAmountForAddress(tx: any, address: string): number {
+    try {
+        const outputsToAddr = (tx?.vout || []).reduce((sum: number, o: any) => {
+            const oAddr = o?.scriptpubkey_address;
+            const val = typeof o?.value === 'number' ? o.value : 0;
+            return sum + (oAddr === address ? val : 0);
+        }, 0);
+
+        const inputsFromAddr = (tx?.vin || []).reduce((sum: number, i: any) => {
+            const prev = i?.prevout;
+            const iAddr = prev?.scriptpubkey_address;
+            const val = typeof prev?.value === 'number' ? prev.value : 0;
+            return sum + (iAddr === address ? val : 0);
+        }, 0);
+
+        return outputsToAddr - inputsFromAddr;
+    } catch {
+        return 0;
+    }
+}
+
+// Fetch all transactions for an address (includes mempool and full chain history via pagination)
+async function fetchAllTransactions(
+    esploraApiUrl: string,
+    address: string,
+    options: { maxPages?: number; perPageHint?: number } = {}
+): Promise<{ mempool: any[]; confirmed: any[] }> {
+    const { maxPages = 1000 } = options;
+    try {
+        logger.info(`Fetching transactions for address: ${address}`);
+
+        // 1) Fetch mempool txs (unconfirmed)
+        const mempoolRes = await axios.get(`${esploraApiUrl}/address/${address}/txs/mempool`);
+        const mempool: any[] = Array.isArray(mempoolRes.data) ? mempoolRes.data : [];
+        logger.info(`Fetched mempool txs: ${mempool.length}`);
+        for (const tx of mempool) {
+            const amt = computeNetAmountForAddress(tx, address);
+            logger.info(`mempool txid=${tx?.txid} amount=${amt}`);
+        }
+
+        // 2) Fetch confirmed txs with pagination
+        const confirmed: any[] = [];
+        // First page
+        const firstPageRes = await axios.get(`${esploraApiUrl}/address/${address}/txs`);
+        let page: any[] = Array.isArray(firstPageRes.data) ? firstPageRes.data : [];
+        confirmed.push(...page);
+        logger.info(`Fetched confirmed page 1: ${page.length}`);
+        for (const tx of page) {
+            const amt = computeNetAmountForAddress(tx, address);
+            logger.info(`confirmed txid=${tx?.txid} amount=${amt}`);
+        }
+
+        // Subsequent pages via last_seen_txid
+        let pagesFetched = 1;
+        let lastSeen = page.length > 0 ? page[page.length - 1].txid : undefined;
+
+        while (lastSeen && page.length > 0 && pagesFetched < maxPages) {
+            const url = `${esploraApiUrl}/address/${address}/txs/chain/${lastSeen}`;
+            const res = await axios.get(url);
+            page = Array.isArray(res.data) ? res.data : [];
+            if (page.length === 0) break;
+            confirmed.push(...page);
+            pagesFetched += 1;
+            lastSeen = page[page.length - 1].txid;
+            logger.info(`Fetched confirmed page ${pagesFetched}: ${page.length}`);
+            for (const tx of page) {
+                const amt = computeNetAmountForAddress(tx, address);
+                logger.info(`confirmed txid=${tx?.txid} amount=${amt}`);
+            }
+        }
+
+        logger.info(`Total confirmed txs: ${confirmed.length}, mempool txs: ${mempool.length}`);
+        return { mempool, confirmed };
+    } catch (error) {
+        logger.error('Failed to fetch transactions for address:', address, error);
+        throw error;
+    }
+}
+
 // Create Bitcoin wallet function (P2WPKH - native SegWit format)
 function createBtcWallet(network: 'mainnet' | 'testnet' = 'testnet'): {
     address: string;
@@ -169,56 +248,96 @@ async function sendTransaction(
             throw new Error('No spendable UTXOs available');
         }
 
-        // Simple UTXO selection: accumulate until amount + estimated fee is covered (exactly like your original)
-        const psbt = new bitcoin.Psbt({ network: net });
+        // Simple UTXO selection: accumulate until amount + estimated fee is covered
+        const selectedUtxos: UTXO[] = [];
         let inputValue = 0;
         for (const u of utxos) {
-            psbt.addInput({
+            selectedUtxos.push(u);
+            inputValue += u.value;
+            // Rough fee estimate: ~110 vB per input, ~31 vB per output (P2WPKH)
+            const estVBytes = 110 * selectedUtxos.length + 31 * 2 + 10;
+            const fee = Math.ceil(estVBytes * feeRate);
+            logger.info(`Selection step: inputs=${selectedUtxos.length}, estVBytes=${estVBytes}, estFee=${fee}, inputValue=${inputValue}`);
+            if (inputValue >= amount + fee) break;
+        }
+
+        // Recalculate fee after inputs are known (first pass estimate)
+        const estVBytesInitial = 110 * selectedUtxos.length + 31 * 2 + 10;
+        const estimatedFee = Math.ceil(estVBytesInitial * feeRate);
+        const provisionalChange = inputValue - amount - estimatedFee;
+
+        if (provisionalChange < 0) {
+            throw new Error('Insufficient balance to cover transaction amount and fees');
+        }
+
+        logger.info(`Fee estimate: estVBytes=${estVBytesInitial}, feeRate=${feeRate}, estimatedFee=${estimatedFee}, inputValue=${inputValue}, amount=${amount}, provisionalChange=${provisionalChange}`);
+
+        // First pass PSBT (with RBF sequences) to measure exact vsize
+        const psbtMeasure = new bitcoin.Psbt({ network: net });
+        for (const u of selectedUtxos) {
+            psbtMeasure.addInput({
                 hash: u.txid,
                 index: u.vout,
+                sequence: 0xfffffffd, // enable RBF
                 witnessUtxo: {
                     script: bitcoin.payments.p2wpkh({ pubkey: Buffer.from(keyPair.publicKey), network: net }).output!,
                     value: u.value,
                 },
             });
-            inputValue += u.value;
-            // Rough fee estimate: ~110 vB per input, ~31 vB per output (P2WPKH)
-            const estVBytes = 110 * psbt.data.inputs.length + 31 * 2 + 10;
-            const fee = Math.ceil(estVBytes * feeRate);
-            if (inputValue >= amount + fee) break;
+        }
+        psbtMeasure.addOutput({ address: receiverAddress, value: amount });
+        if (provisionalChange > 546) {
+            psbtMeasure.addOutput({ address: senderAddress, value: provisionalChange });
+        }
+        psbtMeasure.signAllInputs(keyPair as any);
+        psbtMeasure.finalizeAllInputs();
+        const measuredTx = psbtMeasure.extractTransaction();
+        const exactVSize = measuredTx.virtualSize();
+        const exactFee = Math.ceil(exactVSize * feeRate);
+
+        // Compute exact change from measured size
+        const exactChange = inputValue - amount - exactFee;
+        if (exactChange < 0) {
+            throw new Error('Insufficient balance after exact fee calculation');
         }
 
-        // Recalculate fee after inputs are known and before adding outputs (exactly like your original)
-        const estVBytesInitial = 110 * psbt.data.inputs.length + 31 * 2 + 10;
-        let fee = Math.ceil(estVBytesInitial * feeRate);
-        const change = inputValue - amount - fee;
-        if (change < 0) {
-            throw new Error('Insufficient balance to cover fees');
+        logger.info(`Fee exact: vsize=${exactVSize}, feeRate=${feeRate}, exactFee=${exactFee}, exactChange=${exactChange}`);
+
+        // Second pass PSBT: build with precise change and RBF
+        const psbtFinal = new bitcoin.Psbt({ network: net });
+        for (const u of selectedUtxos) {
+            psbtFinal.addInput({
+                hash: u.txid,
+                index: u.vout,
+                sequence: 0xfffffffd, // enable RBF
+                witnessUtxo: {
+                    script: bitcoin.payments.p2wpkh({ pubkey: Buffer.from(keyPair.publicKey), network: net }).output!,
+                    value: u.value,
+                },
+            });
+        }
+        psbtFinal.addOutput({ address: receiverAddress, value: amount });
+        if (exactChange > 546) {
+            psbtFinal.addOutput({ address: senderAddress, value: exactChange });
+            logger.info(`Change output added: ${exactChange} sats to ${senderAddress}`);
+        } else {
+            logger.info(`No change output (<= dust threshold). Extra sats go to fee.`);
         }
 
-        let amountToSend = amount;
-        if (change > 0 && change <= 546) {
-            // Add tiny change to fee by reducing the main output
-            if (amount - change <= 0) throw new Error('Fee too high relative to amount');
-            amountToSend = amount - change;
-        }
-        psbt.addOutput({ address: receiverAddress, value: amountToSend });
-        if (change > 546) {
-            psbt.addOutput({ address: senderAddress, value: change });
-        }
-
-        // Sign and broadcast (exactly like your original)
-        psbt.signAllInputs(keyPair as any);
-        psbt.finalizeAllInputs();
-        const txHex = psbt.extractTransaction().toHex();
+        // Sign and broadcast final tx
+        psbtFinal.signAllInputs(keyPair as any);
+        psbtFinal.finalizeAllInputs();
+        const txHex = psbtFinal.extractTransaction().toHex();
+        logger.info(`Final tx hex length=${txHex.length}, txid computing...`);
         const txid = await broadcastTx(esploraApiUrl, txHex);
+        logger.info(`Broadcasted txid=${txid}`);
 
         return {
             success: true,
             txid: txid,
             sender: senderAddress,
             receiver: receiverAddress,
-            amount: amountToSend
+            amount: amount
         };
 
     } catch (error) {
@@ -236,11 +355,14 @@ async function sendTransaction(
 // createBtcWallet('testnet');
 
 // Check wallet balance (comment this line if you don't want to use it)
-await getWalletBalance('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3', 'testnet');
+// await getWalletBalance('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3', 'testnet');
 
-// Send transaction (comment this line if you don't want to use it)
-await sendTransaction('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3', 'tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea', 600, 'testnet');
+// // Send transaction (comment this line if you don't want to use it)
+// await sendTransaction('L1AufixjzuQKcAHeNdv7wJ4YK4VfUK2fQaLdzT8CVypHnY7of3i3',
+//     'tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea', 700, 'testnet',
+//     " https://blockstream.info/testnet/api", 5);
 
+fetchAllTransactions('https://blockstream.info/testnet/api', 'tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea');
 // Check wallet balance again (comment this line if you don't want to use it)
 // await getWalletBalance('KyGKqW2yVjps3CrqgsSWJ94SLWKJTPc5zSVyomLYJP1LBwwArypj', 'testnet');
 
