@@ -25,7 +25,7 @@ jobs:
               '- Dust: change only if > 546 sats',
               '- Logging: estimate vs exact fee and change present'
             ].join('\n');
-            await github.pulls.createReview({
+            await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: pr.number,
