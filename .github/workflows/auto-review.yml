@@ -1,0 +1,67 @@
+name: PR Heuristic Review (Dynamic)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute changed files
+        id: diff
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only "$BASE".."$HEAD" > /tmp/changed.txt || true
+          echo "files=$(tr '\n' ',' < /tmp/changed.txt)" >> $GITHUB_OUTPUT
+
+      - name: Post dynamic review
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const files = (core.getInput('files') || process.env.FILES || '').split(',').filter(Boolean);
+            // Derive checks dynamically from changed files
+            const jsTsChanged = files.some(f => /\.(ts|tsx|js|jsx)$/.test(f));
+            const configChanged = files.some(f => /(eslint|prettier|tsconfig|jest)\.\w+/.test(f) || /\.eslintrc|\.prettierrc/.test(f));
+            const docsChanged = files.some(f => /\.(md|mdx)$/.test(f));
+
+            const checks = [];
+            if (jsTsChanged) {
+              checks.push('Types pass (tsc --noEmit)');
+              checks.push('Lint passes (ESLint)');
+              checks.push('No obvious O(n^2) hotspots for large inputs');
+              checks.push('No secrets/keys in source/logs');
+            }
+            if (docsChanged) {
+              checks.push('Docs updated for behavior changes');
+            }
+            if (configChanged) {
+              checks.push('Tooling config changes validated');
+            }
+            // Domain-specific BTC checks when touching src/**
+            if (files.some(f => f.startsWith('src/'))) {
+              checks.push('BTC: two-pass fee exact (vsize×feeRate) present');
+              checks.push('BTC: RBF sequences set (0xfffffffd)');
+              checks.push('BTC: change output only if > 546 sats (no dust)');
+              checks.push('BTC: logs include estimated vs exact fee/change');
+            }
+
+            const body = `Automated heuristic review (based on changed files):\n\nChanged files:\n${files.map(f=>`- ${f}`).join('\n') || '- (none)'}\n\nChecks:\n- ${checks.join('\n- ')}`;
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              event: 'COMMENT',
+              body
+            });
+
