@@ -1,6 +1,5 @@
 export function test(): string {
-    return 'ok';
+  return "ok";
 }
 
 export default test;
-

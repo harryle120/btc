@@ -67,4 +67,3 @@ jobs:
             });
         env:
           FILES: ${{ steps.diff.outputs.files }}
-

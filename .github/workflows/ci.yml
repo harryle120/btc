@@ -53,4 +53,3 @@ jobs:
       - name: Jest (if configured)
         run: |
           if npx --yes jest --version >/dev/null 2>&1; then npx --yes jest --ci --passWithNoTests; else echo "Jest not configured, skipping"; fi
-
