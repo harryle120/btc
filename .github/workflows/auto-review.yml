@@ -20,7 +20,8 @@ jobs:
         run: |
           BASE="${{ github.event.pull_request.base.sha }}"
           HEAD="${{ github.event.pull_request.head.sha }}"
-          git diff --name-only "$BASE".."$HEAD" > /tmp/changed.txt || true
+          # Use triple-dot to compare against merge-base of base and head
+          git diff --name-only "$BASE"..."$HEAD" > /tmp/changed.txt || true
           echo "files=$(tr '\n' ',' < /tmp/changed.txt)" >> $GITHUB_OUTPUT
 
       - name: Post dynamic review
@@ -64,4 +65,6 @@ jobs:
               event: 'COMMENT',
               body
             });
+        env:
+          FILES: ${{ steps.diff.outputs.files }}
 
