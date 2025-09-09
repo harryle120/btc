@@ -1,0 +1,55 @@
+name: CI (Dynamic)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install deps (if package.json)
+        if: hashFiles('package.json') != ''
+        run: |
+          yarn install --frozen-lockfile || npm ci || true
+
+      - name: Determine changed files
+        id: diff
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          git diff --name-only "$BASE".."$HEAD" > /tmp/changed.txt || true
+          echo "files=$(tr '\n' ',' < /tmp/changed.txt)" >> $GITHUB_OUTPUT
+
+      - name: Prettier format check (only if relevant files changed)
+        if: contains(steps.diff.outputs.files, '.ts') || contains(steps.diff.outputs.files, '.js') || contains(steps.diff.outputs.files, '.json') || contains(steps.diff.outputs.files, '.md') || contains(steps.diff.outputs.files, '.yml') || contains(steps.diff.outputs.files, '.yaml')
+        run: |
+          npx --yes prettier --check .
+
+      - name: ESLint (only if JS/TS changed and eslint available)
+        if: contains(steps.diff.outputs.files, '.ts') || contains(steps.diff.outputs.files, '.tsx') || contains(steps.diff.outputs.files, '.js') || contains(steps.diff.outputs.files, '.jsx')
+        run: |
+          if npx --yes eslint -v >/dev/null 2>&1; then npx --yes eslint . --max-warnings=0; else echo "ESLint not configured, skipping"; fi
+
+      - name: TypeScript typecheck (if tsconfig.json present)
+        if: hashFiles('tsconfig.json') != ''
+        run: |
+          npx --yes tsc -p tsconfig.json --noEmit
+
+      - name: Jest (if configured)
+        run: |
+          if npx --yes jest --version >/dev/null 2>&1; then npx --yes jest --ci --passWithNoTests; else echo "Jest not configured, skipping"; fi

@@ -45,16 +45,19 @@ btc/
 ### Installation
 
 1. Install dependencies:
+
 ```bash
 yarn install
 ```
 
 2. Run functions directly:
+
 ```bash
 yarn dev
 ```
 
 3. Or build and run in production mode:
+
 ```bash
 yarn build
 yarn start
@@ -86,16 +89,18 @@ The project includes several example functions in `src/functions/example.ts`:
 ## Running Functions
 
 ### Direct execution:
+
 ```bash
 yarn dev
 ```
 
 ### Import and use in other files:
+
 ```typescript
-import { calculateSum, processData } from './functions/example';
+import { calculateSum, processData } from "./functions/example";
 
 const sum = calculateSum([1, 2, 3, 4, 5]);
-const result = await processData({ name: 'BTC', value: 100 });
+const result = await processData({ name: "BTC", value: 100 });
 ```
 
 ## Development
