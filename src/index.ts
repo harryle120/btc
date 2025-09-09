@@ -376,13 +376,4 @@ fetchAllTransactions('https://blockstream.info/testnet/api', 'tb1q6hks4hg2fv80g0
 // [2025 -09-07T03: 33: 11.541Z][INFO] Private Key: 0becabf03648dcee3657a11f69d772b115c76c738dc5ea82f48472ba24ef1435
 // Done in 0.92s.
 
-[2025 -09-07T03: 36: 35.567Z][INFO] Creating Bitcoin SegWit wallet for testnet...
-[2025 -09-07T03: 36: 35.577Z][INFO] Bitcoin SegWit wallet created successfully!
-[2025 -09-07T03: 36: 35.577Z][INFO] Address: tb1q6hks4hg2fv80g0rpk9732uem4z3sytp7gv9dea
-[2025 -09-07T03: 36: 35.577Z][INFO] WIF: KyGKqW2yVjps3CrqgsSWJ94SLWKJTPc5zSVyomLYJP1LBwwArypj
-[2025 -09-07T03: 36: 35.577Z][INFO] Public Key: 0358f87b896887898cfa3af1625d672119907bc0e5d796badf5c1cfad855ee428a
-[2025 -09-07T03: 36: 35.577Z][INFO] Private Key: 3d0517b0e7f5b5241f1ebe3f85fc8f64746176d0766961040573a11038939aff
-[2025 -09-07T03: 36: 35.577Z][INFO] Getting wallet balance...
-[2025 -09-07T03: 36: 35.580Z][INFO] Checking balance for address: tb1qj5wrad4pvgvxk53h4pmh4auzgumyh387ktc5ju
-[2025 -09-07T03: 36: 36.401Z][INFO] Balance: 235528 sats(0.00235528 BTC)
-[2025 -09-07T03: 36: 36.401Z][INFO] Total UTXOs: 1
+console.log('Hello World');
